@@ -114,6 +114,14 @@ namespace LogConsole
     #define CMDLEN_NAME     32
     #define CMDLEN_HELP     128
 
+    #define COLOR_RED     "\x1b[31m"
+    #define COLOR_GREEN   "\x1b[32m"
+    #define COLOR_YELLOW  "\x1b[33m"
+    #define COLOR_BLUE    "\x1b[34m"
+    #define COLOR_MAGENTA "\x1b[35m"
+    #define COLOR_CYAN    "\x1b[36m"
+    #define COLOR_RESET   "\x1b[0m"
+
     typedef int (*fnLogConsoleCallBack)(const int client, const int argc, const char **argv);
     typedef struct CommandItem {
         char *cmdGroup;
@@ -127,45 +135,49 @@ namespace LogConsole
         struct CommandItem *children;
     } TCommandItem;
 
-    class Thread {
+    class SimpleThread {
         private:
-            pthread_t myThread;
+            pthread_t simpleThread;
             int retval;
         public:
-            Thread ();
-            ~Thread ();
-            virtual int run ();
+            SimpleThread();
+            ~SimpleThread();
             static void *run_ (void *);
             void start ();
             int join ();
             void setRetval (int r) { retval = r; }
+
+            virtual int run ();
     };
 
-    Thread::Thread () {}
-    Thread::~Thread () {}
+    SimpleThread::SimpleThread () {
+        //  TODO:
+    }
+    SimpleThread::~SimpleThread () {
+        //  TODO:
+    }
 
-    int Thread::run () { return 0; } /* 어짜피 오버라이딩 될 부분 */
-    void *Thread::run_ (void *pthis_) // 중간에서 run을 다시 호출해줄 녀석
+    int SimpleThread::run() { 
+        return 0; 
+    }
+
+    void *SimpleThread::run_(void *pthis_)
     {
-        Thread *pthis = (Thread *)pthis_;
+        SimpleThread *pthis = (SimpleThread *)pthis_;
         pthis->setRetval (pthis->run ());
         pthread_exit (NULL);
     }
-    void Thread::start ()
-    { /* 여기서부터 스레드가 생성됩니다. */
-        pthread_create (&myThread, NULL,
-            Thread::run_, (void *)this);
-        /* Thread::run_은 앞서 Class내에서 static으로
-        선언했으므로 가능합니다. 그리고 this는 엄연한 값이므로 가능. */
+
+    void SimpleThread::start() {
+        pthread_create (&simpleThread, NULL, SimpleThread::run_, (void *)this);
     }
 
-    int Thread::join ()
-    {
-        pthread_join (myThread, NULL);
+    int SimpleThread::join() {
+        pthread_join (simpleThread, NULL);
         return retval;
     }
 
-    class LogConsole: public Thread
+    class LogConsole: public SimpleThread
     {
         private:
             int mPortNo;
@@ -181,7 +193,7 @@ namespace LogConsole
             TCommandItem* findGroupItem(TCommandItem *commandItems, const char *find_str);
             TCommandItem* insertCommandItem(TCommandItem *commandItems, TCommandItem *item);
             TCommandItem* makeCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func);
-            void displayCommandGroup(const int client, TCommandItem *cmdItem);
+            void displayCommandGroup(const int client, TCommandItem *cmdItem, const char *cmd);
             TCommandItem* findCommandItem(TCommandItem *baseItems, const char *cmdName);
 
         public:
@@ -197,7 +209,8 @@ namespace LogConsole
             int appendCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func);
             void logArgs(const int client, const char *format, ...);
 
-            int  printCommandHelp(const int client);
+            int  printCommandHelp(const int client, const char *cmd);
+            void runSystemCommand(const int client, const char *cmd);
     };
 
     LogConsole::LogConsole(const int portNo) {
@@ -269,7 +282,9 @@ namespace LogConsole
 
             std::cout << "Connected from " << inet_ntoa(clieAddr.sin_addr) << std::endl;
 
-            // if you allow multiple connection, just contains below function in thread
+            // force telnet character mode - 
+            // send(clieSocket, "\377\375\042\377\373\001", 6, 0);
+            // if you allow multiple connection, just contains below function in SimpleThread
             doCommunicate(clieSocket, mServerSocket);
         }
 
@@ -295,7 +310,7 @@ namespace LogConsole
         int  recvMsgSize;
 
         do {
-            logArgs(client, "taurus:%s$ ", mCurrentGroup->cmdGroup);
+            logArgs(client, COLOR_YELLOW "taurus:%s$ " COLOR_RESET, mCurrentGroup->cmdGroup);
             recvMsgSize = recv(client, echoBuffer, RCVBUFSIZE, 0);
             echoBuffer[recvMsgSize] = 0;
 
@@ -390,24 +405,30 @@ namespace LogConsole
         return 0;
     }
 
-    void LogConsole::displayCommandGroup(const int client, TCommandItem *cmdItem) {
+    void LogConsole::displayCommandGroup(const int client, TCommandItem *cmdItem, const char *cmd) {
         TCommandItem *child;
 
-        logArgs(client, "Group - [%s]\n", cmdItem->cmdGroup);
+        logArgs(client, "Group - [%s%s%s]\n", COLOR_CYAN, cmdItem->cmdGroup, COLOR_RESET);
         child = cmdItem->children;
         while (child) {
-            logArgs(client, "%16s : %s\n", child->cmdName, child->cmdHelp);
+            if (cmd == NULL) {
+                logArgs(client, "%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
+            } else {
+                if (strncmp(child->cmdName, cmd, strlen(cmd)) == 0)
+                    logArgs(client, "%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
+            }
+            
             child = child->next;
         }
     }
 
-    int  LogConsole::printCommandHelp(const int client) {
+    int  LogConsole::printCommandHelp(const int client, const char *cmd = NULL) {
         TCommandItem *cmdItem;
 
         // Display '/' group items      // Root Group will be existed in mCommandItems's final.
         cmdItem = mCommandItems;
         while (cmdItem) {
-            displayCommandGroup(client, cmdItem);
+            displayCommandGroup(client, cmdItem, cmd);
             cmdItem = cmdItem->next;
         }
         cmdItem = mCommandItems;
@@ -457,8 +478,27 @@ namespace LogConsole
             }
         }
 
-        logArgs(client, "Can't find command name [%s]\n", cmd);
+        logArgs(client, "[ERR] Can't find command name [%s]\n", cmd);
+        // if you want to display similar command list, please unblock below
+        //logArgs(client, "List of command which is matched with [%s]\n", cmd);
+        //printCommandHelp(client, cmd);
+        //  if command is not existed in dictionary, try to run it in system
+        runSystemCommand(client, command);
         free(temp);
+    }
+
+    void LogConsole::runSystemCommand(const int client, const char *cmd) {
+        FILE *fp;
+        char buf[512];
+
+        fp = popen(cmd, "r");
+        if (fp == NULL) {
+            logArgs(client, "[ERR] Fail to run command - [%s]", cmd);
+            return;
+        }
+        while (fgets(buf, sizeof(buf) - 1, fp) != NULL)
+            logArgs(client, "%s", buf);
+        pclose(fp);
     }
 
     TCommandItem*   LogConsole::findCommandItem(TCommandItem *baseItems, const char *cmdName) {
