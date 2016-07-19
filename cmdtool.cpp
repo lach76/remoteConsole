@@ -8,6 +8,12 @@
  * Corporation and you.
  */
 
+/*
+    TODO:
+        Support Multi-Session
+        Support Auto-Complete
+*/
+
 // includes header for TCP/IP Telnet Daemon
 #include <stdio.h>
 #include <sys/socket.h>
