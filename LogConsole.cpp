@@ -160,7 +160,7 @@ private:
 		int readno;
 
 		do {
-			writeLine(COLOR_YELLOW "taurus:%s$ " COLOR_RESET, getPrompt());
+			writeLine(COLOR_YELLOW "taurus:%s/$ " COLOR_RESET, getPrompt());
 			readno = readLine_(client, echoBuffer, RCVBUFSIZE);
 			echoBuffer[readno] = 0;
 
@@ -196,6 +196,10 @@ public:
 	int readLine(char *buffer, const int buffersize) {
 		//TODO: Should support Telnet Character mode.
 		return readLine_(mClientSocket, buffer, buffersize);
+	}
+
+	void disconnect() {
+		close(mClientSocket);
 	}
 
 	int writeLine(const char *format, ...) {
@@ -258,8 +262,6 @@ typedef struct CommandItem {
 
 class CommandTool {
 private:
-	TCommandItem *mCommandItems;
-	TCommandItem *mCurrentGroup;
 	char *mLastUsedCmdGroup;
 
 	TCommandItem* makeCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func) {
@@ -278,6 +280,9 @@ private:
 
 	TCommandItem* findGroupItem(TCommandItem *commandItems, const char *findstr) {
 		TCommandItem *cur = commandItems;
+
+		if (findstr == NULL) 
+			return cur;
 
 		while (cur) {
 			if (strcmp(findstr, cur->cmdGroup) == 0)
@@ -299,12 +304,42 @@ private:
 		return item;
 	}
 
+	TCommandItem* findCommandItem(TCommandItem *baseItems, const char *cmdName) {
+		TCommandItem *cmdItem;
+
+		if (baseItems == NULL)
+			return NULL;
+
+		cmdItem = baseItems->children;	
+		while (cmdItem) {
+			if (strcmp(cmdItem->cmdName, cmdName) == 0)
+				return cmdItem;
+			cmdItem = cmdItem->next;
+		}
+
+		return NULL;
+	}
+
 public:
+	TCommandItem *mCommandItems;
+	TCommandItem *mCurrentGroup;
+
 	CommandTool() {
 		mCommandItems = NULL;
 		mCurrentGroup = NULL;
 		mLastUsedCmdGroup = NULL;
 		PRINT_NET("Init CommandTool\n");
+	}
+
+	TCommandItem*	getRootCommandItems() {
+		return mCommandItems;
+	}
+
+	void changeCommandGroup(const char *group) {
+		TCommandItem *cmdItem = findGroupItem(mCommandItems, group);
+
+		if (cmdItem)
+			mCurrentGroup = cmdItem;
 	}
 
 	int appendCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func) {
@@ -333,9 +368,41 @@ public:
 
 		return 0;
 	}
+
+	bool	runCommandInGroup(const char *cmd, const int argc, const char **argv) {
+		TCommandItem *cmdItem = findCommandItem(mCurrentGroup, cmd);
+
+		if (cmdItem) {
+			if (cmdItem->pfnCmdFunc)
+				cmdItem->pfnCmdFunc(argc, (const char**) argv);
+			
+			return true;
+		}
+		return false;
+	}
+
+	bool	runCommandInWhole(const char *cmd, const int argc, const char **argv) {
+		TCommandItem *baseItem = mCommandItems;
+		TCommandItem *cmdItem;
+
+		while (baseItem) {
+			cmdItem = findCommandItem(baseItem, cmd);
+			if (cmdItem) {
+				if (cmdItem->pfnCmdFunc)
+					cmdItem->pfnCmdFunc(argc, (const char**) argv);
+
+				return true;
+			}
+			baseItem = baseItem->next;
+		}
+
+		return false;
+	}
+
 };
 
 class CommandDaemon: public ConnectorDaemon, public CommandTool {
+#define	MAXARGS_NUM	20
 private:
 	int mAcceptedLogLevel;
 
@@ -343,13 +410,69 @@ private:
 		mAcceptedLogLevel = LOG_LEVEL_ALL;
 	}
 
+	void	runSystemCommand(const char *cmd) {
+		FILE *fp;
+		char buf[512];
+
+		fp = popen(cmd, "r");
+		if (fp == NULL) {
+			writeLine("Error : Fail to run command [%s]\n", cmd);
+			return;
+		}
+		while (fgets(buf, sizeof(buf) - 1, fp) != NULL)
+			writeLine("%s", buf);
+		pclose(fp);
+	}
+
 	int processCommand(const int client, const char *buffer) {
-		//	TODO: process command.
+		int argc;
+		char *argv[MAXARGS_NUM], *str;
+
+		char *temp;
+		char *cmd, *args, *tok;
+		const char *command = buffer;
+		bool	result;
+
+		if (strlen(command) == 0)
+			return 0;
+
+		temp = strdup(command);
+		cmd = strtok_r(temp, " ,", &args);
+
+		argc = 0;
+		while ((tok = strtok_r(NULL, " ,", &args)))
+			argv[argc++] = tok;
+
+		result = runCommandInGroup(cmd, argc, (const char**)argv) ? true : runCommandInWhole(cmd, argc, (const char**)argv);
+		if (!result) {
+			writeLine("Error : Can't find command name [%s]\n", cmd);
+			runSystemCommand(command);
+		} 
+
+		free(temp);
+
 		return 0;
 	}
 
+	void displayCommandGroup(TCommandItem *cmdItem, const char *cmd) {
+		TCommandItem *child;
+
+		writeLine("Group - [%s%s%s]\n", COLOR_CYAN, cmdItem->cmdGroup, COLOR_RESET);
+		child = cmdItem->children;
+		while (child) {
+			if (cmd == NULL) {
+				writeLine("%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
+			} else {
+				if (strncmp(child->cmdName, cmd, strlen(cmd)) == 0)
+					writeLine("%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
+			}
+
+			child = child->next;
+		}
+	}
+
 	char *getPrompt() {
-		return (char*) "Test";
+		return (char*)mCurrentGroup->cmdGroup;
 	}
 
 	bool isPrintable(const int loglevel, const char *module, const char *file) {
@@ -399,13 +522,97 @@ public:
 			return;
 		}
 	}
+
+	int	printCommandHelp(const char *cmd = NULL) {
+		TCommandItem *cmdItem = getRootCommandItems();
+
+		// Display '/' group items      // Root Group will be existed in mCommandItems's final.
+		while (cmdItem) {
+			displayCommandGroup(cmdItem, cmd);
+			cmdItem = cmdItem->next;
+		}
+
+		return 0;
+	}
+
 };
+
+#if 0
+int _changeCommandGroup(const int client, const int argc, const char **argv) {
+	LogConsole::ConsoleDaemon *Console = LogConsole::ConsoleDaemon::getInstance();
+
+	if (argc < 1)
+		return -1;
+
+	Console->changeGroup(client, argv[0]);
+
+	return 0;
+}
+
+int _changeConsoleParameters(const int client, const int argc, const char **argv) {
+	LogConsole::ConsoleDaemon *Console = LogConsole::ConsoleDaemon::getInstance();
+
+	Console->enableParameters(client, argc, argv);
+	return 0;
+}
+
+	appendCommandItem("/", "help", "Print out all command functions", _printCommandHelp);
+	appendCommandItem("/", "cd", "Change command group", _changeCommandGroup);
+	appendCommandItem("/", "enable", "Enable Console parameters", _changeConsoleParameters);
+#endif
+
+int __printCommandHelp(const int argc, const char **argv) {
+	CommandDaemon *Console = CommandDaemon::getInstance();
+
+	Console->printCommandHelp(NULL);
+
+	return 0;
+}
+
+int __disconnectConsole(const int argc, const char **argv) {
+	CommandDaemon *Console = CommandDaemon::getInstance();
+
+	Console->disconnect();
+
+	return 0;
+}
+
+int __changeCommandGroup(const int argc, const char **argv) {
+	CommandDaemon *Console = CommandDaemon::getInstance();
+
+	if (argc < 1)
+		Console->changeCommandGroup(NULL);
+	else
+		Console->changeCommandGroup(argv[0]);
+
+	return 0;
+}
+
+int __add2Value(const int argc, const char **argv) {
+	int a, b;
+
+	if (argc != 2) {
+		PRINT_NET("Error : argument is not matched\n");
+		return -1;
+	}
+
+	a = atoi(argv[0]);
+	b = atoi(argv[1]);
+
+	PRINT_NET("%d + %d = %d\n", a, b, a+b);
+
+	return 0;
+}
 
 int main() {
 	CommandDaemon *cmdDaemon;
 
-	cmdDaemon = new CommandDaemon();
+	cmdDaemon = CommandDaemon::getInstance();
+	cmdDaemon->appendCommandItem(":", "exit", "Disconnect console", __disconnectConsole);
+	cmdDaemon->appendCommandItem(":", "help", "Print out all command functions", __printCommandHelp);
+	cmdDaemon->appendCommandItem(":", "ccd", "Change Command Group", __changeCommandGroup);
 
+	cmdDaemon->appendCommandItem("sample", "add2", "add two values", __add2Value);
 	while (1)
 		sleep(10000);
 }

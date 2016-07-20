@@ -43,7 +43,7 @@
 
 #define ConsolePrintf(...)  printConsoleLog(NULL, 0, LOG_LEVEL_SYS, __VA_ARGS__)
 
-typedef int (*fnLogConsoleCallBack)(const int client, const int argc, const char **argv);
+typedef int (*fnLogConsoleCallBack)(const int argc, const char **argv);
 
 int appendCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func);
 int printConsoleLog(const char *file, const int line, const int logLevel, const char *format, ...);
