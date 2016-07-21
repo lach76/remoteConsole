@@ -30,7 +30,7 @@
 
 #include "LogConsole.h"
 
-using namespace LogConsole;
+//using namespace LogConsole;
 
 #define COLOR_RED     "\x1b[31m"
 #define COLOR_GREEN   "\x1b[32m"
@@ -40,8 +40,57 @@ using namespace LogConsole;
 #define COLOR_CYAN    "\x1b[36m"
 #define COLOR_RESET   "\x1b[0m"
 
-#define	PRINT_CON(...)	printf(__VA_ARGS__)
-#define	PRINT_NET(...)	printf(__VA_ARGS__)
+#define	PRINT_CON(...)	DEFLOG::print(TLOGLEVEL_SYS, "SYS", __VA_ARGS__)
+
+namespace DEFLOG {		//	for AOSP, Logcat binding.
+
+#if 1		//	for emulation, aosp debug
+void pl_log_err(const char *tag, const char *msg) {
+	printf("[%s] %s", tag, msg);
+}
+void pl_log_wrn(const char *tag, const char *msg) {
+	printf("[%s] %s", tag, msg);
+}
+void pl_log_msg(const char *tag, const char *msg) {
+	printf("[%s] %s", tag, msg);
+}
+void pl_log_dbg(const char *tag, const char *msg) {
+	printf("[%s] %s", tag, msg);
+}
+#endif
+void print_args(const int loglevel, const char *tag, const char *format, va_list ap) {
+	int written;
+	char buf[512];
+
+	written = vsnprintf(buf, 511, format, ap);
+	buf[written] = '\0';
+
+	switch (loglevel) {
+	case TLOGLEVEL_ERR:
+		pl_log_err(tag, buf);
+		break;
+	case TLOGLEVEL_WRN:
+		pl_log_wrn(tag, buf);
+		break;
+	case TLOGLEVEL_MSG:
+		pl_log_msg(tag, buf);
+		break;
+	case TLOGLEVEL_DBG:
+	default:
+		pl_log_dbg(tag, buf);
+		break;
+	}
+}
+void print(const int loglevel, const char *tag, const char *format, ...) {
+	va_list ap;
+
+	va_start(ap, format);
+	print_args(loglevel, tag, format, ap);
+	va_end(ap);
+}
+
+
+}
 
 class SimpleThread {
 private:
@@ -216,7 +265,7 @@ public:
 		return writeLine_(mClientSocket, buf, written + 1);
 	}
 
-	int	writeLine(const char *format, va_list ap) {
+	int writeLine(const char *format, va_list ap) {
 		char buf[512];
 		int written;
 
@@ -281,7 +330,7 @@ private:
 	TCommandItem* findGroupItem(TCommandItem *commandItems, const char *findstr) {
 		TCommandItem *cur = commandItems;
 
-		if (findstr == NULL) 
+		if (findstr == NULL)
 			return cur;
 
 		while (cur) {
@@ -310,7 +359,7 @@ private:
 		if (baseItems == NULL)
 			return NULL;
 
-		cmdItem = baseItems->children;	
+		cmdItem = baseItems->children;
 		while (cmdItem) {
 			if (strcmp(cmdItem->cmdName, cmdName) == 0)
 				return cmdItem;
@@ -328,10 +377,10 @@ public:
 		mCommandItems = NULL;
 		mCurrentGroup = NULL;
 		mLastUsedCmdGroup = NULL;
-		PRINT_NET("Init CommandTool\n");
+		PRINT_CON("Init CommandTool\n");
 	}
 
-	TCommandItem*	getRootCommandItems() {
+	TCommandItem* getRootCommandItems() {
 		return mCommandItems;
 	}
 
@@ -369,19 +418,19 @@ public:
 		return 0;
 	}
 
-	bool	runCommandInGroup(const char *cmd, const int argc, const char **argv) {
+	bool runCommandInGroup(const char *cmd, const int argc, const char **argv) {
 		TCommandItem *cmdItem = findCommandItem(mCurrentGroup, cmd);
 
 		if (cmdItem) {
 			if (cmdItem->pfnCmdFunc)
 				cmdItem->pfnCmdFunc(argc, (const char**) argv);
-			
+
 			return true;
 		}
 		return false;
 	}
 
-	bool	runCommandInWhole(const char *cmd, const int argc, const char **argv) {
+	bool runCommandInWhole(const char *cmd, const int argc, const char **argv) {
 		TCommandItem *baseItem = mCommandItems;
 		TCommandItem *cmdItem;
 
@@ -405,12 +454,16 @@ class CommandDaemon: public ConnectorDaemon, public CommandTool {
 #define	MAXARGS_NUM	20
 private:
 	int mAcceptedLogLevel;
+	char *mAcceptedFiles;
+	char *mAcceptedModules;
 
 	void initInternalVariables() {
-		mAcceptedLogLevel = LOG_LEVEL_ALL;
+		mAcceptedLogLevel = TLOGLEVEL_ALL;
+		mAcceptedFiles = NULL;
+		mAcceptedModules = NULL;
 	}
 
-	void	runSystemCommand(const char *cmd) {
+	void runSystemCommand(const char *cmd) {
 		FILE *fp;
 		char buf[512];
 
@@ -420,7 +473,7 @@ private:
 			return;
 		}
 		while (fgets(buf, sizeof(buf) - 1, fp) != NULL)
-			writeLine("%s", buf);
+			print("%s", buf);
 		pclose(fp);
 	}
 
@@ -431,7 +484,7 @@ private:
 		char *temp;
 		char *cmd, *args, *tok;
 		const char *command = buffer;
-		bool	result;
+		bool result;
 
 		if (strlen(command) == 0)
 			return 0;
@@ -443,11 +496,11 @@ private:
 		while ((tok = strtok_r(NULL, " ,", &args)))
 			argv[argc++] = tok;
 
-		result = runCommandInGroup(cmd, argc, (const char**)argv) ? true : runCommandInWhole(cmd, argc, (const char**)argv);
+		result = runCommandInGroup(cmd, argc, (const char**) argv) ? true : runCommandInWhole(cmd, argc, (const char**) argv);
 		if (!result) {
-			writeLine("Error : Can't find command name [%s]\n", cmd);
+			print("Error : Can't find command name [%s]\n", cmd);
 			runSystemCommand(command);
-		} 
+		}
 
 		free(temp);
 
@@ -457,14 +510,14 @@ private:
 	void displayCommandGroup(TCommandItem *cmdItem, const char *cmd) {
 		TCommandItem *child;
 
-		writeLine("Group - [%s%s%s]\n", COLOR_CYAN, cmdItem->cmdGroup, COLOR_RESET);
+		print("Group - [%s%s%s]\n", COLOR_CYAN, cmdItem->cmdGroup, COLOR_RESET);
 		child = cmdItem->children;
 		while (child) {
 			if (cmd == NULL) {
-				writeLine("%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
+				print("%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
 			} else {
 				if (strncmp(child->cmdName, cmd, strlen(cmd)) == 0)
-					writeLine("%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
+					print("%s%16s%s : %s\n", COLOR_YELLOW, child->cmdName, COLOR_RESET, child->cmdHelp);
 			}
 
 			child = child->next;
@@ -472,11 +525,27 @@ private:
 	}
 
 	char *getPrompt() {
-		return (char*)mCurrentGroup->cmdGroup;
+		return (char*) mCurrentGroup->cmdGroup;
 	}
 
 	bool isPrintable(const int loglevel, const char *module, const char *file) {
-		return loglevel & mAcceptedLogLevel;
+		bool result;
+
+		result = loglevel & mAcceptedLogLevel;
+
+		//	LOGLEVEL_SYS not filtering.
+		if (TLOGLEVEL_SYS & loglevel)
+			return result;
+
+		if (module && mAcceptedModules) {
+			if (strstr(mAcceptedModules, module) == NULL)
+				result = false;
+		}
+		if (file && mAcceptedFiles) {
+			if (strstr(mAcceptedFiles, file) == NULL)
+				result = false;
+		}
+		return result;
 	}
 
 public:
@@ -505,7 +574,7 @@ public:
 		va_end(ap);
 	}
 
-	void printArgs(const char *module, const char *file, const char *line, const int loglevel, const char *format, ...) {
+	void printArgs(const char *module, const char *file, const int line, const int loglevel, const char *format, ...) {
 		va_list ap;
 
 		if (not isPrintable(loglevel, module, file)) {
@@ -517,13 +586,22 @@ public:
 		va_end(ap);
 	}
 
-	void printArgv(const char *module, const char *file, const char *line, const int loglevel, const char *format, va_list ap) {
+	void printArgv(const char *module, const char *file, const int line, const int loglevel, const char *format, va_list ap) {
 		if (not isPrintable(loglevel, module, file)) {
 			return;
 		}
+
+		if (module)
+			writeLine("[%s]", module);
+		if (file)
+			writeLine("[%s:%d]", file, line);
+
+		writeLine(format, ap);
+
+		DEFLOG::print_args(loglevel, module, format, ap);
 	}
 
-	int	printCommandHelp(const char *cmd = NULL) {
+	int printCommandHelp(const char *cmd = NULL) {
 		TCommandItem *cmdItem = getRootCommandItems();
 
 		// Display '/' group items      // Root Group will be existed in mCommandItems's final.
@@ -537,12 +615,27 @@ public:
 
 };
 
+void TLOG::print(const char *module, const char *file, const int line, const int loglevel, const char *format, ...) {
+	va_list ap;
+	CommandDaemon *console = CommandDaemon::getInstance();
+
+	va_start(ap, format);
+	console->printArgv(module, file, line, loglevel, format, ap);
+	va_end(ap);
+}
+
+int TLOG::appendCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func) {
+	CommandDaemon *console = CommandDaemon::getInstance();
+
+	return console->appendCommandItem(cmdGroup, cmdName, cmdHelp, func);
+}
+
 #if 0
 int _changeCommandGroup(const int client, const int argc, const char **argv) {
 	LogConsole::ConsoleDaemon *Console = LogConsole::ConsoleDaemon::getInstance();
 
 	if (argc < 1)
-		return -1;
+	return -1;
 
 	Console->changeGroup(client, argv[0]);
 
@@ -556,9 +649,9 @@ int _changeConsoleParameters(const int client, const int argc, const char **argv
 	return 0;
 }
 
-	appendCommandItem("/", "help", "Print out all command functions", _printCommandHelp);
-	appendCommandItem("/", "cd", "Change command group", _changeCommandGroup);
-	appendCommandItem("/", "enable", "Enable Console parameters", _changeConsoleParameters);
+appendCommandItem("/", "help", "Print out all command functions", _printCommandHelp);
+appendCommandItem("/", "cd", "Change command group", _changeCommandGroup);
+appendCommandItem("/", "enable", "Enable Console parameters", _changeConsoleParameters);
 #endif
 
 int __printCommandHelp(const int argc, const char **argv) {
@@ -592,27 +685,26 @@ int __add2Value(const int argc, const char **argv) {
 	int a, b;
 
 	if (argc != 2) {
-		PRINT_NET("Error : argument is not matched\n");
+		TLOG_CMD("Error : argument is not matched\n");
 		return -1;
 	}
 
 	a = atoi(argv[0]);
 	b = atoi(argv[1]);
 
-	PRINT_NET("%d + %d = %d\n", a, b, a+b);
+	TLOG_CMD("%d + %d = %d\n", a, b, a + b);
 
 	return 0;
 }
 
+DECLARE_MODULE_NAME("LOGCONSOL")
 int main() {
-	CommandDaemon *cmdDaemon;
+	TLOG_DBG("Test Debug...\n");
+	TLOG_ADDCMD(":", "exit", "Disconnect console", __disconnectConsole);
+	TLOG_ADDCMD(":", "help", "Print out all command functions", __printCommandHelp);
+	TLOG_ADDCMD(":", "ccd", "Change Command Group", __changeCommandGroup);
 
-	cmdDaemon = CommandDaemon::getInstance();
-	cmdDaemon->appendCommandItem(":", "exit", "Disconnect console", __disconnectConsole);
-	cmdDaemon->appendCommandItem(":", "help", "Print out all command functions", __printCommandHelp);
-	cmdDaemon->appendCommandItem(":", "ccd", "Change Command Group", __changeCommandGroup);
-
-	cmdDaemon->appendCommandItem("sample", "add2", "add two values", __add2Value);
+	TLOG_ADDCMD("sample", "add2", "add two values", __add2Value);
 	while (1)
 		sleep(10000);
 }

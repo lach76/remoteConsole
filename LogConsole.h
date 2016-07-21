@@ -22,32 +22,36 @@
 #include <stdio.h>
 #include <iostream>
 
-#define DECLARE_MODULE_NAME(x)
+#define DECLARE_MODULE_NAME(x) static const char* MODULE_VAR = #x;
 
-#define  LOG_LEVEL_NON  0
-#define  LOG_LEVEL_ERR  1
-#define  LOG_LEVEL_WRN  2
-#define  LOG_LEVEL_MSG  4
-#define  LOG_LEVEL_DBG  8
-#define  LOG_LEVEL_SYS  16
+#define	TLOGLEVEL_DBG	1
+#define	TLOGLEVEL_WRN	2
+#define	TLOGLEVEL_MSG	4
+#define	TLOGLEVEL_ERR	8
+#define	TLOGLEVEL_SYS	16
+#define	TLOGLEVEL_ALL	(TLOGLEVEL_DBG | TLOGLEVEL_WRN | TLOGLEVEL_MSG | TLOGLEVEL_ERR | TLOGLEVEL_SYS)
 
-#define  LOG_LEVEL_ALL  (LOG_LEVEL_ERR | LOG_LEVEL_WRN | LOG_LEVEL_MSG | LOG_LEVEL_DBG | LOG_LEVEL_SYS)
-
-#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
-
-#define LOG__           printConsoleLog
-#define LOG_DBG(...)    LOG__(__FILENAME__, __LINE__, LOG_LEVEL_DBG, __VA_ARGS__)
-#define LOG_ERR(...)    LOG__(__FILENAME__, __LINE__, LOG_LEVEL_ERR, __VA_ARGS__)
-#define LOG_MSG(...)    LOG__(__FILENAME__, __LINE__, LOG_LEVEL_MSG, __VA_ARGS__)
-#define LOG_WRN(...)    LOG__(__FILENAME__, __LINE__, LOG_LEVEL_WRN, __VA_ARGS__)
-
-#define ConsolePrintf(...)  printConsoleLog(NULL, 0, LOG_LEVEL_SYS, __VA_ARGS__)
+#define	__FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
 typedef int (*fnLogConsoleCallBack)(const int argc, const char **argv);
+#define	__MODULE__		MODULE_VAR
 
-int appendCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func);
-int printConsoleLog(const char *file, const int line, const int logLevel, const char *format, ...);
+#define	TLOG_		TLOG::print
+#define	TLOG_DBG(...)		TLOG_(__MODULE__, __FILENAME__, __LINE__, TLOGLEVEL_DBG, __VA_ARGS__)
+#define	TLOG_WRN(...)		TLOG_(__MODULE__, __FILENAME__, __LINE__, TLOGLEVEL_WRN, __VA_ARGS__)
+#define	TLOG_MSG(...)		TLOG_(__MODULE__, __FILENAME__, __LINE__, TLOGLEVEL_MSG, __VA_ARGS__)
+#define	TLOG_ERR(...)		TLOG_(__MODULE__, __FILENAME__, __LINE__, TLOGLEVEL_ERR, __VA_ARGS__)
+#define	TLOG_SYS(...)		TLOG_(__MODULE__, __FILENAME__, __LINE__, TLOGLEVEL_SYS, __VA_ARGS__)
+#define	TLOG_CMD(...)		TLOG_(NULL, NULL, 0, TLOGLEVEL_SYS, __VA_ARGS__)
 
+#define	TLOG_ADDCMD		TLOG::appendCommandItem
+
+namespace TLOG {
+	void	print(const char *module, const char *file, const int line, const int loglevel, const char *format, ...);
+	int		appendCommandItem(const char *cmdGroup, const char *cmdName, const char *cmdHelp, fnLogConsoleCallBack func);
+}
+
+#if 0		//	to be unblocked
 namespace consoleUtils {
     template<class Elem, class Traits>
     inline void hex_dump(const void* aData, std::size_t aLength, std::basic_ostream<Elem, Traits>& aStream, std::size_t aWidth = 16)
@@ -113,10 +117,7 @@ namespace LogConsole {
 
         return prettyFunction.substr(begin,end);
     }
-
-
-
-
 }
+#endif
 
 #endif // __LOGCONSOLE_H__
